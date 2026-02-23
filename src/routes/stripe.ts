@@ -2,7 +2,7 @@ import { LicenseStatus } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { Request, Response, Router } from 'express';
 import { prisma } from '../prisma';
-import { STRIPE_WEBHOOK_SECRET, stripe } from '../stripe';
+import { stripe } from "../stripe";
 
 const router = Router();
 
@@ -151,7 +151,7 @@ const handleInvoicePaymentFailed = async (event: any): Promise<void> => {
 export const stripeWebhookHandler = async (req: Request, res: Response) => {
   const signature = req.headers['stripe-signature'];
 
-  if (!STRIPE_WEBHOOK_SECRET || typeof signature !== 'string') {
+  if (!process.env.STRIPE_WEBHOOK_SECRET || typeof signature !== 'string') {
     return res.status(400).json({ error: 'Webhook not configured' });
   }
 
@@ -160,7 +160,7 @@ export const stripeWebhookHandler = async (req: Request, res: Response) => {
     event = stripe.webhooks.constructEvent(
       req.body,
       signature,
-      STRIPE_WEBHOOK_SECRET,
+      process.env.STRIPE_WEBHOOK_SECRET,
     );
   } catch {
     return res.status(400).json({ error: 'Invalid webhook signature' });
