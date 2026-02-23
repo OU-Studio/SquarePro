@@ -1,0 +1,41 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum LicenseStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELED
+  INCOMPLETE
+}
+
+model License {
+  id                   String         @id @default(cuid())
+  licenseKey           String         @unique
+  stripeCustomerId     String
+  stripeSubscriptionId String         @unique
+  status               LicenseStatus
+  maxDomains           Int            @default(2)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+  domains              LicenseDomain[]
+}
+
+model LicenseDomain {
+  id         String   @id @default(cuid())
+  licenseId  String
+  hostname   String
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+
+  license License @relation(fields: [licenseId], references: [id], onDelete: Cascade)
+
+  @@unique([licenseId, hostname])
+  @@index([hostname])
+}
