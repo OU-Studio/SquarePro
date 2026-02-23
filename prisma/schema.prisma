@@ -39,3 +39,15 @@ model LicenseDomain {
   @@unique([licenseId, hostname])
   @@index([hostname])
 }
+
+model EmailOtp {
+  id          String   @id @default(cuid())
+  email       String
+  codeHash    String
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([email])
+  @@index([expiresAt])
+}
