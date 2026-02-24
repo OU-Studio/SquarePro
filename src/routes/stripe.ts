@@ -3,6 +3,8 @@ import { randomBytes } from 'crypto';
 import { Request, Response, Router } from 'express';
 import { prisma } from '../prisma';
 import { stripe } from "../stripe";
+import { generate6DigitCode, hashCode } from "../otp";
+import { sendOtpEmail } from "../mailer";
 
 const router = Router();
 
@@ -191,50 +193,53 @@ export const stripeWebhookHandler = async (req: Request, res: Response) => {
   }
 };
 
-router.post('/portal-session', async (req: Request, res: Response) => {
+router.post("/portal-session", async (req, res) => {
   try {
-    const licenseKey =
-      typeof req.body?.licenseKey === 'string' ? req.body.licenseKey.trim() : '';
-    const customerEmail =
-      typeof req.body?.customerEmail === 'string'
-        ? req.body.customerEmail.trim().toLowerCase()
-        : '';
+    const licenseKey = String(req.body?.licenseKey || "").trim();
+    const code = String(req.body?.code || "").trim();
 
-    let customerId = '';
+    if (!licenseKey) return res.status(400).json({ ok: false, reason: "MISSING_LICENSE_KEY" });
+    if (!code) return res.status(400).json({ ok: false, reason: "MISSING_OTP" });
 
-    if (licenseKey) {
-      const license = await prisma.license.findUnique({
-        where: { licenseKey },
-      });
-      if (license?.stripeCustomerId) {
-        customerId = license.stripeCustomerId;
-      }
+    const lic = await prisma.license.findUnique({ where: { licenseKey } });
+    if (!lic) return res.status(404).json({ ok: false, reason: "INVALID_KEY" });
+
+    const email = (lic.customerEmail || "").trim().toLowerCase();
+    if (!email) return res.status(400).json({ ok: false, reason: "NO_EMAIL_ON_FILE" });
+
+    const codeHash = hashCode(email, code);
+
+    const otp = await prisma.emailOtp.findFirst({
+      where: {
+        email,
+        codeHash,
+        usedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (!otp) return res.status(401).json({ ok: false, reason: "INVALID_OTP" });
+
+    await prisma.emailOtp.update({
+      where: { id: otp.id },
+      data: { usedAt: new Date() },
+    });
+
+    if (!lic.stripeCustomerId) {
+      return res.status(404).json({ ok: false, reason: "CUSTOMER_NOT_FOUND" });
     }
 
-    if (!customerId && customerEmail) {
-      const customers = await stripe.customers.list({
-        email: customerEmail,
-        limit: 1,
-      });
-      const first = customers.data[0];
-      if (first?.id) {
-        customerId = first.id;
-      }
-    }
+    const returnUrl = process.env.APP_BASE_URL || "https://squarepro.co.uk";
 
-    if (!customerId) {
-      return res.status(404).json({ error: 'Customer not found' });
-    }
-
-    const returnUrl = process.env.APP_BASE_URL || 'http://localhost:3000';
     const session = await stripe.billingPortal.sessions.create({
-      customer: customerId,
+      customer: lic.stripeCustomerId,
       return_url: returnUrl,
     });
 
     return res.json({ ok: true, url: session.url });
   } catch {
-    return res.status(500).json({ error: 'Could not create portal session' });
+    return res.status(500).json({ ok: false, reason: "SERVER_ERROR" });
   }
 });
 
@@ -261,6 +266,44 @@ router.get('/license/by-subscription/:subscriptionId', async (req, res) => {
     });
   } catch {
     return res.status(500).json({ error: 'Lookup failed' });
+  }
+});
+
+router.post("/request-otp", async (req, res) => {
+  try {
+    const licenseKey = String(req.body?.licenseKey || "").trim();
+    if (!licenseKey) {
+      return res.status(400).json({ ok: false, reason: "MISSING_LICENSE_KEY" });
+    }
+
+    const lic = await prisma.license.findUnique({ where: { licenseKey } });
+    if (!lic) return res.status(404).json({ ok: false, reason: "INVALID_KEY" });
+
+    // Must have email on file (set by checkout webhook)
+    const emailRaw = (lic.customerEmail || "").trim().toLowerCase();
+    if (!emailRaw || !emailRaw.includes("@")) {
+      return res.status(400).json({ ok: false, reason: "NO_EMAIL_ON_FILE" });
+    }
+
+    const code = generate6DigitCode();
+    const codeHash = hashCode(emailRaw, code);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await prisma.emailOtp.updateMany({
+      where: { email: emailRaw, usedAt: null, expiresAt: { gt: new Date() } },
+      data: { usedAt: new Date() },
+    });
+
+    await prisma.emailOtp.create({
+      data: { email: emailRaw, codeHash, expiresAt },
+    });
+
+    await sendOtpEmail(emailRaw, code);
+
+    // Do NOT return the email. Just confirm sent.
+    return res.json({ ok: true });
+  } catch {
+    return res.status(500).json({ ok: false, reason: "SERVER_ERROR" });
   }
 });
 
