@@ -57,6 +57,8 @@ app.use(
       const allowed = new Set([
         "https://squarepro.co.uk",
         "https://www.squarepro.co.uk",
+        "https://onwards-upwards.squarespace.com",
+        "https://ou.studio"
       ]);
       if (!origin || allowed.has(origin)) return cb(null, true);
       return cb(new Error("Not allowed by CORS"));
