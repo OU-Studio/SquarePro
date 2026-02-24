@@ -11,28 +11,56 @@ export function getMailer() {
   }
 
   return nodemailer.createTransport({
-  host,
-  port,
-  secure: port === 587,
-  auth: { user, pass },
+    host,
+    port,
+    secure: port === 465, // 465 = implicit TLS, 587 = STARTTLS
 
-  // Prevent hanging forever
-  connectionTimeout: 10_000, // 10s to connect
-  greetingTimeout: 10_000,   // 10s for server greeting
-  socketTimeout: 15_000,     // 15s per socket inactivity
-});
+    auth: { user, pass },
+
+    // IMPORTANT: prevent indefinite hangs
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 15_000,
+
+    // Resend on 587 expects STARTTLS
+    requireTLS: port === 587,
+    tls: {
+      servername: host,
+    },
+  });
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, rej) =>
+      setTimeout(() => rej(new Error(`${label} timed out after ${ms}ms`)), ms)
+    ),
+  ]);
 }
 
 export async function sendOtpEmail(to: string, code: string) {
   const from = process.env.SMTP_FROM || "SquarePro <no-reply@squarepro.co.uk>";
   const transporter = getMailer();
 
-  await transporter.sendMail({
-    from,
-    to,
-    subject: "Your SquarePro verification code",
-    text: `Your SquarePro code is: ${code}\n\nIt expires in 10 minutes.`,
-  });
+  // This forces a connect/handshake and will surface errors quickly
+  await withTimeout(transporter.verify(), 10_000, "SMTP verify");
+
+  try {
+    await withTimeout(
+      transporter.sendMail({
+        from,
+        to,
+        subject: "Your SquarePro verification code",
+        text: `Your SquarePro code is: ${code}\n\nIt expires in 10 minutes.`,
+      }),
+      15_000,
+      "SMTP sendMail"
+    );
+  } catch (err) {
+    console.error("EMAIL_SEND_FAILED", err);
+    throw err;
+  }
 }
 
 export async function sendLicenseKeyEmail(params: {
