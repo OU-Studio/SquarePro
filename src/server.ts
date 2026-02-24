@@ -1,12 +1,16 @@
 import express from "express";
 import cors from "cors";
 import licenseRouter from "./routes/license";
-import stripeRouter from "./routes/stripe";
+import stripeRouter, { stripeWebhookHandler } from "./routes/stripe";
 
 const app = express();
 
 // 1) Stripe webhook MUST stay raw
-app.post("/stripe/webhook", express.raw({ type: "application/json" }));
+app.post(
+  "/stripe/webhook",
+  express.raw({ type: "application/json" }),
+  stripeWebhookHandler
+);
 
 // 2) JSON parser for everything else
 app.use(express.json());
