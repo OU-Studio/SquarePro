@@ -315,21 +315,24 @@ router.post("/request-otp", async (req, res) => {
 
     console.log("[request-otp] sending email to", emailRaw);
 
-    await prisma.emailOtp.updateMany({
-      where: { email: emailRaw, usedAt: null, expiresAt: { gt: new Date() } },
-      data: { usedAt: new Date() },
-    });
+    console.log("[request-otp] invalidate start");
+await prisma.emailOtp.updateMany({
+  where: { email: emailRaw, usedAt: null, expiresAt: { gt: new Date() } },
+  data: { usedAt: new Date() },
+});
+console.log("[request-otp] invalidate done");
 
-    await prisma.emailOtp.create({
-      data: { email: emailRaw, codeHash, expiresAt },
-    });
+console.log("[request-otp] create start");
+await prisma.emailOtp.create({
+  data: { email: emailRaw, codeHash, expiresAt },
+});
+console.log("[request-otp] create done");
 
-    await sendOtpEmail(emailRaw, code);
+console.log("[request-otp] send start");
+await sendOtpEmail(emailRaw, code);
+console.log("[request-otp] send done");
 
-    console.log("[request-otp] email sent");
-
-    // Do NOT return the email. Just confirm sent.
-    return res.json({ ok: true });
+return res.json({ ok: true });
   } catch {
     return res.status(500).json({ ok: false, reason: "SERVER_ERROR" });
   }
