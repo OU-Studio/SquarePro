@@ -330,10 +330,10 @@ console.log("[request-otp] create done");
 
 console.log("[request-otp] send start");
 await sendOtpEmail(emailRaw, code);
-console.log("[request-otp] send done");
-
-return res.json({ ok: true });
-  } catch {
+    console.log("[request-otp] email sent");
+    return res.json({ ok: true });
+  } catch (e: any) {
+    console.error("[request-otp] ERROR", e?.message || e, e?.stack || "");
     return res.status(500).json({ ok: false, reason: "SERVER_ERROR" });
   }
 });

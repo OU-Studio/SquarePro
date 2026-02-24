@@ -13,12 +13,15 @@ export function getMailer() {
   return nodemailer.createTransport({
   host,
   port,
-  secure: true,                // because 465
+  secure: port === 465,
   auth: { user, pass },
 
   connectionTimeout: 10_000,
   greetingTimeout: 10_000,
   socketTimeout: 15_000,
+
+  logger: true,
+  debug: true,
 });
 }
 
@@ -35,23 +38,22 @@ export async function sendOtpEmail(to: string, code: string) {
   const from = process.env.SMTP_FROM || "SquarePro <no-reply@squarepro.co.uk>";
   const transporter = getMailer();
 
-  // This forces a connect/handshake and will surface errors quickly
-  await withTimeout(transporter.verify(), 10_000, "SMTP verify");
-
   try {
-    await withTimeout(
-      transporter.sendMail({
-        from,
-        to,
-        subject: "Your SquarePro verification code",
-        text: `Your SquarePro code is: ${code}\n\nIt expires in 10 minutes.`,
-      }),
-      15_000,
-      "SMTP sendMail"
-    );
-  } catch (err) {
-    console.error("EMAIL_SEND_FAILED", err);
-    throw err;
+    console.log("[mailer] verify start");
+    await transporter.verify();
+    console.log("[mailer] verify ok");
+
+    console.log("[mailer] send start");
+    const info = await transporter.sendMail({
+      from,
+      to,
+      subject: "Your SquarePro verification code",
+      text: `Your SquarePro code is: ${code}\n\nIt expires in 10 minutes.`,
+    });
+    console.log("[mailer] send ok", info?.messageId || info);
+  } catch (e: any) {
+    console.error("[mailer] SEND FAILED", e?.message || e, e?.stack || "");
+    throw e;
   }
 }
 
