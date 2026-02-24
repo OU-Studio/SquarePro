@@ -35,7 +35,8 @@ const ensureLicenseForSubscription = async (params: {
   stripeSubscriptionId: string;
   stripeCustomerId: string;
   status: LicenseStatus;
-}): Promise<void> => {
+  customerEmail?: string | null;
+}) => {
   const existing = await prisma.license.findUnique({
     where: { stripeSubscriptionId: params.stripeSubscriptionId },
   });
@@ -46,6 +47,8 @@ const ensureLicenseForSubscription = async (params: {
       data: {
         stripeCustomerId: params.stripeCustomerId,
         status: params.status,
+        // only set if we don't already have it
+        customerEmail: existing.customerEmail ?? (params.customerEmail || null),
       },
     });
     return;
@@ -59,15 +62,16 @@ const ensureLicenseForSubscription = async (params: {
           stripeCustomerId: params.stripeCustomerId,
           stripeSubscriptionId: params.stripeSubscriptionId,
           status: params.status,
+          customerEmail: params.customerEmail || null,
         },
       });
       return;
     } catch (error) {
       if (
-        typeof error === 'object' &&
+        typeof error === "object" &&
         error &&
-        'code' in error &&
-        (error as { code?: string }).code === 'P2002'
+        "code" in error &&
+        (error as { code?: string }).code === "P2002"
       ) {
         const raceWinner = await prisma.license.findUnique({
           where: { stripeSubscriptionId: params.stripeSubscriptionId },
@@ -79,6 +83,7 @@ const ensureLicenseForSubscription = async (params: {
             data: {
               stripeCustomerId: params.stripeCustomerId,
               status: params.status,
+              customerEmail: raceWinner.customerEmail ?? (params.customerEmail || null),
             },
           });
           return;
@@ -92,20 +97,26 @@ const ensureLicenseForSubscription = async (params: {
 };
 
 const handleCheckoutCompleted = async (event: any): Promise<void> => {
-  const session = event.data.object as {
-    subscription?: string | null;
-    customer?: string | null;
-  };
+  const session = event.data.object as any;
 
-  if (!session.subscription || !session.customer) {
-    return;
-  }
+  const subscriptionId: string | null | undefined = session.subscription;
+  const customerId: string | null | undefined = session.customer;
 
-  const subscription = await stripe.subscriptions.retrieve(session.subscription);
+  // Stripe can provide email in a couple places:
+  const email: string | null =
+    session.customer_details?.email ||
+    session.customer_email ||
+    null;
+
+  if (!subscriptionId || !customerId) return;
+
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+
   await ensureLicenseForSubscription({
     stripeSubscriptionId: subscription.id,
-    stripeCustomerId: session.customer,
+    stripeCustomerId: customerId,
     status: mapStripeSubscriptionStatus(subscription.status),
+    customerEmail: email,
   });
 };
 
@@ -115,14 +126,26 @@ const upsertFromSubscriptionObject = async (subscription: {
   status: string;
 }): Promise<void> => {
   const customerId =
-    typeof subscription.customer === 'string'
+    typeof subscription.customer === "string"
       ? subscription.customer
       : subscription.customer.id;
+
+  // fetch email from Stripe customer
+  let email: string | null = null;
+  try {
+    const customer = await stripe.customers.retrieve(customerId);
+    if (customer && typeof customer === "object" && !("deleted" in customer)) {
+      email = customer.email || null;
+    }
+  } catch {
+    // ignore; email is optional
+  }
 
   await ensureLicenseForSubscription({
     stripeSubscriptionId: subscription.id,
     stripeCustomerId: customerId,
     status: mapStripeSubscriptionStatus(subscription.status),
+    customerEmail: email,
   });
 };
 
