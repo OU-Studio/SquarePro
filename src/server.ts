@@ -24,7 +24,7 @@ app.use(
     origin: true, // reflect request origin
     methods: ["POST", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
-  })
+  }) 
 );
 
 // If you have public marketing pages calling /stripe/request-otp or /stripe/portal-session,
