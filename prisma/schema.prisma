@@ -25,6 +25,8 @@ model License {
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
   domains              LicenseDomain[]
+  customerEmail        String?
+  keySentAt            DateTime?
 }
 
 model LicenseDomain {

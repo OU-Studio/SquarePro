@@ -94,5 +94,28 @@ router.post('/verify', async (req, res) => {
   }
 });
 
+router.post("/status", async (req, res) => {
+  try {
+    const key = typeof req.body?.key === "string" ? req.body.key.trim() : "";
+    if (!key) return res.status(400).json({ ok: false, reason: "MISSING_KEY" });
+
+    const lic = await prisma.license.findUnique({
+      where: { licenseKey: key },
+      include: { domains: true },
+    });
+
+    if (!lic) return res.status(404).json({ ok: false, reason: "INVALID_KEY" });
+
+    return res.json({
+      ok: true,
+      status: lic.status,
+      maxDomains: lic.maxDomains,
+      boundDomains: lic.domains.map((d) => d.hostname),
+    });
+  } catch {
+    return res.status(500).json({ ok: false, reason: "SERVER_ERROR" });
+  }
+});
+
 export { normalizeHostname };
 export default router;

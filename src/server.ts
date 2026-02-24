@@ -3,7 +3,27 @@ import cors from "cors";
 import licenseRouter from "./routes/license";
 import stripeRouter, { stripeWebhookHandler } from "./routes/stripe";
 
+import rateLimit from "express-rate-limit";
+
 const app = express();
+
+// Rate limit /license/verify (key + IP)
+const verifyLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 120,            // 120 requests/min per (key+ip)
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const key = typeof req.body?.key === "string" ? req.body.key : "no-key";
+    return `${req.ip}:${key}`;
+  },
+  message: { active: false, reason: "RATE_LIMITED" },
+});
+
+// Apply only to the verify endpoint
+app.use("/license/verify", express.json(), verifyLimiter);
+
+
 
 // 1) Stripe webhook MUST stay raw
 app.post(

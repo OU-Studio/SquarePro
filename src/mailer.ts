@@ -29,3 +29,30 @@ export async function sendOtpEmail(to: string, code: string) {
     text: `Your SquarePro code is: ${code}\n\nIt expires in 10 minutes.`,
   });
 }
+
+export async function sendLicenseKeyEmail(params: {
+  to: string;
+  licenseKey: string;
+}) {
+  const { to, licenseKey } = params;
+
+  const from = process.env.SMTP_FROM || "SquarePro <no-reply@squarepro.co.uk>";
+  const transporter = getMailer();
+
+  const snippet = `<script src="https://cdn.squarepro.co.uk/squarepro.min.js" data-squarepro-key="${licenseKey}"></script>`;
+
+  await transporter.sendMail({
+    from,
+    to,
+    subject: "Your SquarePro license key",
+    text:
+      `Here’s your SquarePro license key:\n\n` +
+      `${licenseKey}\n\n` +
+      `Install (Squarespace → Settings → Advanced → Code Injection → HEADER):\n\n` +
+      `${snippet}\n\n` +
+      `Activation:\n` +
+      `1) Load once on yoursite.squarespace.com (preview domain)\n` +
+      `2) Load once on your live domain\n` +
+      `Your license will bind to those two domains.\n`,
+  });
+}
