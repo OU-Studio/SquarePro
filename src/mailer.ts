@@ -1,75 +1,59 @@
-import nodemailer from "nodemailer";
+const RESEND_URL = "https://api.resend.com/emails";
 
-export function getMailer() {
-  const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || "465");
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-
-  if (!host || !user || !pass) {
-    throw new Error("SMTP env vars missing (SMTP_HOST/SMTP_USER/SMTP_PASS).");
-  }
-
-  return nodemailer.createTransport({
-  host,
-  port,
-  secure: port === 465,
-  auth: { user, pass },
-
-  connectionTimeout: 10_000,
-  greetingTimeout: 10_000,
-  socketTimeout: 15_000,
-
-  logger: true,
-  debug: true,
-});
+function mustEnv(name: string) {
+  const v = process.env[name];
+  if (!v) throw new Error(`${name} is not set`);
+  return v;
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<T>((_, rej) =>
-      setTimeout(() => rej(new Error(`${label} timed out after ${ms}ms`)), ms)
-    ),
-  ]);
+async function sendResendEmail(params: {
+  to: string;
+  subject: string;
+  text: string;
+}) {
+  const apiKey = mustEnv("RESEND_API_KEY");
+  const from = process.env.SMTP_FROM || "SquarePro <no-reply@squarepro.co.uk>";
+
+  const res = await fetch(RESEND_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from,
+      to: [params.to],
+      subject: params.subject,
+      text: params.text,
+    }),
+  });
+
+  const data = await res.json().catch(() => null);
+
+  if (!res.ok) {
+    const msg =
+      (data && (data.message || data.error)) ||
+      `Resend API failed (${res.status})`;
+    throw new Error(msg);
+  }
+
+  return data; // contains id
 }
 
 export async function sendOtpEmail(to: string, code: string) {
-  const from = process.env.SMTP_FROM || "SquarePro <no-reply@squarepro.co.uk>";
-  const transporter = getMailer();
-
-  try {
-    console.log("[mailer] verify start");
-    await transporter.verify();
-    console.log("[mailer] verify ok");
-
-    console.log("[mailer] send start");
-    const info = await transporter.sendMail({
-      from,
-      to,
-      subject: "Your SquarePro verification code",
-      text: `Your SquarePro code is: ${code}\n\nIt expires in 10 minutes.`,
-    });
-    console.log("[mailer] send ok", info?.messageId || info);
-  } catch (e: any) {
-    console.error("[mailer] SEND FAILED", e?.message || e, e?.stack || "");
-    throw e;
-  }
+  await sendResendEmail({
+    to,
+    subject: "Your SquarePro verification code",
+    text: `Your SquarePro code is: ${code}\n\nIt expires in 10 minutes.`,
+  });
 }
 
-export async function sendLicenseKeyEmail(params: {
-  to: string;
-  licenseKey: string;
-}) {
+export async function sendLicenseKeyEmail(params: { to: string; licenseKey: string }) {
   const { to, licenseKey } = params;
-
-  const from = process.env.SMTP_FROM || "SquarePro <no-reply@squarepro.co.uk>";
-  const transporter = getMailer();
 
   const snippet = `<script src="https://cdn.squarepro.co.uk/squarepro.min.js" data-squarepro-key="${licenseKey}"></script>`;
 
-  await transporter.sendMail({
-    from,
+  await sendResendEmail({
     to,
     subject: "Your SquarePro license key",
     text:
