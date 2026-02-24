@@ -2,7 +2,7 @@ import nodemailer from "nodemailer";
 
 export function getMailer() {
   const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || "587");
+  const port = Number(process.env.SMTP_PORT || "465");
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
 
@@ -11,23 +11,15 @@ export function getMailer() {
   }
 
   return nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465, // 465 = implicit TLS, 587 = STARTTLS
+  host,
+  port,
+  secure: true,                // because 465
+  auth: { user, pass },
 
-    auth: { user, pass },
-
-    // IMPORTANT: prevent indefinite hangs
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 15_000,
-
-    // Resend on 587 expects STARTTLS
-    requireTLS: port === 587,
-    tls: {
-      servername: host,
-    },
-  });
+  connectionTimeout: 10_000,
+  greetingTimeout: 10_000,
+  socketTimeout: 15_000,
+});
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
