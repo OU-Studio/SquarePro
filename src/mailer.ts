@@ -11,11 +11,16 @@ export function getMailer() {
   }
 
   return nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-  });
+  host,
+  port,
+  secure: port === 587,
+  auth: { user, pass },
+
+  // Prevent hanging forever
+  connectionTimeout: 10_000, // 10s to connect
+  greetingTimeout: 10_000,   // 10s for server greeting
+  socketTimeout: 15_000,     // 15s per socket inactivity
+});
 }
 
 export async function sendOtpEmail(to: string, code: string) {

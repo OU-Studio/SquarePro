@@ -295,6 +295,7 @@ router.get('/license/by-subscription/:subscriptionId', async (req, res) => {
 router.post("/request-otp", async (req, res) => {
   try {
     const licenseKey = String(req.body?.licenseKey || "").trim();
+    console.log("[request-otp] start", { licenseKey });
     if (!licenseKey) {
       return res.status(400).json({ ok: false, reason: "MISSING_LICENSE_KEY" });
     }
@@ -312,6 +313,8 @@ router.post("/request-otp", async (req, res) => {
     const codeHash = hashCode(emailRaw, code);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
+    console.log("[request-otp] sending email to", emailRaw);
+
     await prisma.emailOtp.updateMany({
       where: { email: emailRaw, usedAt: null, expiresAt: { gt: new Date() } },
       data: { usedAt: new Date() },
@@ -322,6 +325,8 @@ router.post("/request-otp", async (req, res) => {
     });
 
     await sendOtpEmail(emailRaw, code);
+
+    console.log("[request-otp] email sent");
 
     // Do NOT return the email. Just confirm sent.
     return res.json({ ok: true });
