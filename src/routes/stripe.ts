@@ -232,7 +232,7 @@ router.post('/portal-session', async (req: Request, res: Response) => {
       return_url: returnUrl,
     });
 
-    return res.json({ url: session.url });
+    return res.json({ ok: true, url: session.url });
   } catch {
     return res.status(500).json({ error: 'Could not create portal session' });
   }
