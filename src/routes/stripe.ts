@@ -37,27 +37,34 @@ async function deliverLicenseEmailIfNeeded(params: {
 }) {
   const { licenseId, to, licenseKey } = params;
 
-  const fresh = await prisma.license.findUnique({ where: { id: licenseId } });
-  if (!fresh) return;
-
-  if (fresh.keySentAt) {
-    console.log("[license-email] already sent; skip", { licenseId });
-    return;
-  }
-
-  console.log("[license-email] sending", { licenseId, to });
-  await sendLicenseKeyEmail(to, licenseKey);
-
-  await prisma.license.update({
-    where: { id: licenseId },
+  // Atomically claim the right to send (only one request wins)
+  const claimed = await prisma.license.updateMany({
+    where: { id: licenseId, keySentAt: null },
     data: {
       keySentAt: new Date(),
-      // backfill if missing
-      customerEmail: fresh.customerEmail ?? to,
+      customerEmail: to, // backfill; safe overwrite with same value
     },
   });
 
-  console.log("[license-email] sent", { licenseId });
+  if (claimed.count === 0) {
+    console.log("[license-email] already claimed/sent; skip", { licenseId });
+    return;
+  }
+
+  try {
+    console.log("[license-email] sending", { licenseId, to });
+    await sendLicenseKeyEmail(to, licenseKey);
+    console.log("[license-email] sent", { licenseId });
+  } catch (e) {
+    // If sending fails, undo claim so a retry can send later
+    await prisma.license.update({
+      where: { id: licenseId },
+      data: { keySentAt: null },
+    });
+
+    console.error("[license-email] SEND FAILED (claim reverted)", e);
+    throw e;
+  }
 }
 
 const generateLicenseKey = (): string =>
@@ -86,7 +93,7 @@ const ensureLicenseForSubscription = async (params: {
     });
   }
 
-  for (;;) {
+  for (; ;) {
     try {
       return await prisma.license.create({
         data: {
@@ -394,20 +401,20 @@ router.post("/request-otp", async (req, res) => {
     console.log("[request-otp] sending email to", emailRaw);
 
     console.log("[request-otp] invalidate start");
-await prisma.emailOtp.updateMany({
-  where: { email: emailRaw, usedAt: null, expiresAt: { gt: new Date() } },
-  data: { usedAt: new Date() },
-});
-console.log("[request-otp] invalidate done");
+    await prisma.emailOtp.updateMany({
+      where: { email: emailRaw, usedAt: null, expiresAt: { gt: new Date() } },
+      data: { usedAt: new Date() },
+    });
+    console.log("[request-otp] invalidate done");
 
-console.log("[request-otp] create start");
-await prisma.emailOtp.create({
-  data: { email: emailRaw, codeHash, expiresAt },
-});
-console.log("[request-otp] create done");
+    console.log("[request-otp] create start");
+    await prisma.emailOtp.create({
+      data: { email: emailRaw, codeHash, expiresAt },
+    });
+    console.log("[request-otp] create done");
 
-console.log("[request-otp] send start");
-await sendOtpEmail(emailRaw, code);
+    console.log("[request-otp] send start");
+    await sendOtpEmail(emailRaw, code);
     console.log("[request-otp] email sent");
     return res.json({ ok: true });
   } catch (e: any) {
