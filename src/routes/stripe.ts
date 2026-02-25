@@ -29,20 +29,41 @@ const mapStripeSubscriptionStatus = (
   }
 };
 
-async function deliverKeyIfNeeded(licenseId: string, to: string, licenseKey: string) {
-  const fresh = await prisma.license.findUnique({ where: { id: licenseId } });
-  if (!fresh || fresh.keySentAt) return;
+// ---- Send-once helper (use this everywhere) ----
+async function deliverLicenseEmailIfNeeded(params: {
+  licenseId: string;
+  to: string;
+  licenseKey: string;
+}) {
+  const { licenseId, to, licenseKey } = params;
 
+  const fresh = await prisma.license.findUnique({ where: { id: licenseId } });
+  if (!fresh) return;
+
+  if (fresh.keySentAt) {
+    console.log("[license-email] already sent; skip", { licenseId });
+    return;
+  }
+
+  console.log("[license-email] sending", { licenseId, to });
   await sendLicenseKeyEmail(to, licenseKey);
 
   await prisma.license.update({
     where: { id: licenseId },
-    data: { keySentAt: new Date() },
+    data: {
+      keySentAt: new Date(),
+      // backfill if missing
+      customerEmail: fresh.customerEmail ?? to,
+    },
   });
+
+  console.log("[license-email] sent", { licenseId });
 }
 
-const generateLicenseKey = (): string => `SPRO_${randomBytes(24).toString('base64url')}`;
+const generateLicenseKey = (): string =>
+  `SPRO_${randomBytes(24).toString("base64url")}`;
 
+// ---- Ensure license exists for a subscription (returns the License row) ----
 const ensureLicenseForSubscription = async (params: {
   stripeSubscriptionId: string;
   stripeCustomerId: string;
@@ -59,6 +80,7 @@ const ensureLicenseForSubscription = async (params: {
       data: {
         stripeCustomerId: params.stripeCustomerId,
         status: params.status,
+        // only set email if we don't already have it
         customerEmail: existing.customerEmail ?? (params.customerEmail || null),
       },
     });
@@ -76,6 +98,7 @@ const ensureLicenseForSubscription = async (params: {
         },
       });
     } catch (error) {
+      // handle race (unique constraint)
       if (
         typeof error === "object" &&
         error &&
@@ -104,30 +127,39 @@ const ensureLicenseForSubscription = async (params: {
   }
 };
 
+// ---- Checkout completed (if you use Checkout) ----
 const handleCheckoutCompleted = async (event: any): Promise<void> => {
   const session = event.data.object as any;
 
   const subscriptionId: string | null | undefined = session.subscription;
   const customerId: string | null | undefined = session.customer;
 
-  // Stripe can provide email in a couple places:
   const email: string | null =
-    session.customer_details?.email ||
-    session.customer_email ||
-    null;
+    session.customer_details?.email || session.customer_email || null;
 
   if (!subscriptionId || !customerId) return;
 
   const subscription = await stripe.subscriptions.retrieve(subscriptionId);
 
-  await ensureLicenseForSubscription({
+  const license = await ensureLicenseForSubscription({
     stripeSubscriptionId: subscription.id,
     stripeCustomerId: customerId,
     status: mapStripeSubscriptionStatus(subscription.status),
     customerEmail: email,
   });
+
+  if (email) {
+    await deliverLicenseEmailIfNeeded({
+      licenseId: license.id,
+      to: email,
+      licenseKey: license.licenseKey,
+    });
+  } else {
+    console.log("[checkout.completed] no email on session; skip license email");
+  }
 };
 
+// ---- Subscription updated/deleted path (works for dashboard-created subs too) ----
 const upsertFromSubscriptionObject = async (subscription: {
   id: string;
   customer: string | { id: string };
@@ -138,39 +170,73 @@ const upsertFromSubscriptionObject = async (subscription: {
       ? subscription.customer
       : subscription.customer.id;
 
-  // fetch email from Stripe customer
+  // fetch customer email from Stripe (reliable)
   let email: string | null = null;
   try {
     const customer = await stripe.customers.retrieve(customerId);
     if (customer && typeof customer === "object" && !("deleted" in customer)) {
       email = customer.email || null;
     }
-  } catch {
-    // ignore; email is optional
+  } catch (e) {
+    console.log("[subscription.upsert] could not fetch customer email", e);
   }
 
   const license = await ensureLicenseForSubscription({
-  stripeSubscriptionId: subscription.id,
-  stripeCustomerId: customerId,
-  status: mapStripeSubscriptionStatus(subscription.status),
-  customerEmail: email,
-});
+    stripeSubscriptionId: subscription.id,
+    stripeCustomerId: customerId,
+    status: mapStripeSubscriptionStatus(subscription.status),
+    customerEmail: email,
+  });
 
-if (email) {
-  await deliverKeyIfNeeded(license.id, email, license.licenseKey);
-}
+  if (email) {
+    await deliverLicenseEmailIfNeeded({
+      licenseId: license.id,
+      to: email,
+      licenseKey: license.licenseKey,
+    });
+  }
 };
 
+// ---- Invoice paid fallback (ALWAYS fires on successful payment) ----
+// This is your safety net to ensure license email goes out even if checkout event isn't used.
 const handleInvoicePaid = async (event: any): Promise<void> => {
-  const invoice = event.data.object as { subscription?: string | null };
-  if (!invoice.subscription) {
-    return;
+  const invoice = event.data.object as any;
+
+  const subscriptionId: string | null | undefined = invoice.subscription;
+  const customerId: string | null | undefined = invoice.customer;
+
+  if (!subscriptionId || !customerId) return;
+
+  // get canonical subscription status from Stripe
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+
+  // fetch customer email from Stripe
+  let email: string | null = null;
+  try {
+    const customer = await stripe.customers.retrieve(customerId);
+    if (customer && typeof customer === "object" && !("deleted" in customer)) {
+      email = customer.email || null;
+    }
+  } catch (e) {
+    console.log("[invoice.paid] could not fetch customer email", e);
   }
 
-  await prisma.license.updateMany({
-    where: { stripeSubscriptionId: invoice.subscription },
-    data: { status: LicenseStatus.ACTIVE },
+  const license = await ensureLicenseForSubscription({
+    stripeSubscriptionId: subscription.id,
+    stripeCustomerId: customerId,
+    status: mapStripeSubscriptionStatus(subscription.status),
+    customerEmail: email,
   });
+
+  if (email) {
+    await deliverLicenseEmailIfNeeded({
+      licenseId: license.id,
+      to: email,
+      licenseKey: license.licenseKey,
+    });
+  } else {
+    console.log("[invoice.paid] no customer email; skip license email");
+  }
 };
 
 const handleInvoicePaymentFailed = async (event: any): Promise<void> => {
