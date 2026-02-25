@@ -48,16 +48,12 @@ export async function sendOtpEmail(to: string, code: string) {
   });
 }
 
-export async function sendLicenseKeyEmail(params: { to: string; licenseKey: string }) {
-  const { to, licenseKey } = params;
-
+export async function sendLicenseKeyEmail(to: string, licenseKey: string) {
   const snippet = `<script src="https://cdn.squarepro.co.uk/squarepro.min.js" data-squarepro-key="${licenseKey}"></script>`;
-
   await sendResendEmail({
     to,
-    subject: "Your SquarePro license key",
-    text:
-      `Here’s your SquarePro license key:\n\n` +
+    subject: "Your SquarePro verification code",
+    text:  `Here’s your SquarePro license key:\n\n` +
       `${licenseKey}\n\n` +
       `Install (Squarespace → Settings → Advanced → Code Injection → HEADER):\n\n` +
       `${snippet}\n\n` +
