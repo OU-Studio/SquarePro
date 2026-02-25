@@ -4,7 +4,7 @@ import { Request, Response, Router } from 'express';
 import { prisma } from '../prisma';
 import { stripe } from "../stripe";
 import { generate6DigitCode, hashCode } from "../otp";
-import { sendOtpEmail } from "../mailer";
+import { sendOtpEmail, sendLicenseKeyEmail } from "../mailer";
 
 const router = Router();
 
@@ -29,6 +29,18 @@ const mapStripeSubscriptionStatus = (
   }
 };
 
+async function deliverKeyIfNeeded(licenseId: string, to: string, licenseKey: string) {
+  const fresh = await prisma.license.findUnique({ where: { id: licenseId } });
+  if (!fresh || fresh.keySentAt) return;
+
+  await sendLicenseKeyEmail(to, licenseKey);
+
+  await prisma.license.update({
+    where: { id: licenseId },
+    data: { keySentAt: new Date() },
+  });
+}
+
 const generateLicenseKey = (): string => `SPRO_${randomBytes(24).toString('base64url')}`;
 
 const ensureLicenseForSubscription = async (params: {
@@ -42,21 +54,19 @@ const ensureLicenseForSubscription = async (params: {
   });
 
   if (existing) {
-    await prisma.license.update({
+    return prisma.license.update({
       where: { id: existing.id },
       data: {
         stripeCustomerId: params.stripeCustomerId,
         status: params.status,
-        // only set if we don't already have it
         customerEmail: existing.customerEmail ?? (params.customerEmail || null),
       },
     });
-    return;
   }
 
   for (;;) {
     try {
-      await prisma.license.create({
+      return await prisma.license.create({
         data: {
           licenseKey: generateLicenseKey(),
           stripeCustomerId: params.stripeCustomerId,
@@ -65,7 +75,6 @@ const ensureLicenseForSubscription = async (params: {
           customerEmail: params.customerEmail || null,
         },
       });
-      return;
     } catch (error) {
       if (
         typeof error === "object" &&
@@ -78,7 +87,7 @@ const ensureLicenseForSubscription = async (params: {
         });
 
         if (raceWinner) {
-          await prisma.license.update({
+          return prisma.license.update({
             where: { id: raceWinner.id },
             data: {
               stripeCustomerId: params.stripeCustomerId,
@@ -86,7 +95,6 @@ const ensureLicenseForSubscription = async (params: {
               customerEmail: raceWinner.customerEmail ?? (params.customerEmail || null),
             },
           });
-          return;
         }
 
         continue;
@@ -141,12 +149,16 @@ const upsertFromSubscriptionObject = async (subscription: {
     // ignore; email is optional
   }
 
-  await ensureLicenseForSubscription({
-    stripeSubscriptionId: subscription.id,
-    stripeCustomerId: customerId,
-    status: mapStripeSubscriptionStatus(subscription.status),
-    customerEmail: email,
-  });
+  const license = await ensureLicenseForSubscription({
+  stripeSubscriptionId: subscription.id,
+  stripeCustomerId: customerId,
+  status: mapStripeSubscriptionStatus(subscription.status),
+  customerEmail: email,
+});
+
+if (email) {
+  await deliverKeyIfNeeded(license.id, email, license.licenseKey);
+}
 };
 
 const handleInvoicePaid = async (event: any): Promise<void> => {
